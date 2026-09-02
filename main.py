@@ -1,135 +1,214 @@
 """
-Simulador simples de terremoto com PyOpenGL.
- 
-Controles:
-  W       -> anda para frente
-  A       -> anda para a esquerda
-  D       -> anda para a direita
-  S       -> desce
-  SHIFT   -> acelera (sprint)
-  MOUSE   -> olha ao redor
-  SCROLL  -> zoom (aproxima/afasta a "lente")
-  ESPACO  -> dispara um terremoto em um epicentro aleatório
-  ESC     -> sai do programa
- 
-Como rodar:
-  pip install pygame PyOpenGL PyOpenGL_accelerate
-  python main.py
+SeismicPyGL — Simulador 3D de Terremotos em Python com Pygame e PyOpenGL.
+Pipeline programável moderno (GLSL 3.3 Core):
+- Câmera em primeira pessoa com Trauma Screen Shake via Ruído de Perlin
+- Deformação sísmica circular calculada diretamente na GPU (ground.vert)
+- Colapso dinâmico de edifícios (afundamento Y, rotação e escombros)
+- Sistema de partículas para fumaça/poeira com Billboarding e Alpha Blending
+- Iluminação direcional (Phong / produto escalar) e texturas via VBO/VAO
+- HUD 2D ortográfico isolado do Depth Test com Escala Richter e FPS estável a 60 FPS
 """
- 
+
+import os
 import sys
+
+# Garante compatibilidade do PyOpenGL no Linux / X11 / Windows / macOS
+if sys.platform.startswith("linux") and "PYOPENGL_PLATFORM" not in os.environ:
+    os.environ["PYOPENGL_PLATFORM"] = "glx"
+
 import pygame
 from pygame.locals import (
-    DOUBLEBUF, OPENGL, QUIT, KEYDOWN, K_ESCAPE, K_SPACE, MOUSEWHEEL,
+    DOUBLEBUF, OPENGL, QUIT, KEYDOWN, K_ESCAPE, K_SPACE,
+    K_1, K_2, K_3, K_4, K_5, K_r, MOUSEWHEEL,
 )
 from OpenGL.GL import (
-    glEnable, glClearColor, glMatrixMode, glLoadIdentity, glClear,
-    GL_DEPTH_TEST, GL_PROJECTION, GL_MODELVIEW,
-    GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
+    glEnable, glClearColor, glClear, glBindTexture,
+    GL_DEPTH_TEST, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT, GL_TEXTURE_2D,
 )
-from OpenGL.GLU import gluPerspective
- 
+
+from math_utils import perspective
 from camera import FreeCamera
-from scene import Ground, generate_city, Mountain, generate_forest
 from earthquake import EarthquakeSimulator
- 
+from scene import (
+    Ground, generate_city, Mountain, generate_forest,
+    get_concrete_texture,
+)
+from particles import ParticleSystem
+from hud import HUD
+from shader import ShaderProgram, check_gl_error
+from texture import cleanup_textures
+
 WINDOW_SIZE = (1000, 700)
 ASPECT_RATIO = WINDOW_SIZE[0] / WINDOW_SIZE[1]
- 
- 
+
+
 def init_opengl():
     glEnable(GL_DEPTH_TEST)
-    glClearColor(0.65, 0.80, 0.95, 1.0)  # cor do céu
-    glMatrixMode(GL_MODELVIEW)
- 
- 
-def apply_projection(fov):
-    """Recalcula a projeção com o FOV atual (muda quando o usuário dá zoom)."""
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
-    gluPerspective(fov, ASPECT_RATIO, 0.1, 1000.0)
-    glMatrixMode(GL_MODELVIEW)
- 
- 
+    glClearColor(0.62, 0.78, 0.94, 1.0)  # Cor de céu aberto
+    check_gl_error("init_opengl")
+
+
 def main():
     pygame.init()
     pygame.display.set_mode(WINDOW_SIZE, DOUBLEBUF | OPENGL)
-    pygame.display.set_caption("Simulador de Terremoto - PyOpenGL")
- 
-    # prende o mouse na janela e esconde o cursor, pro "mouse look" funcionar
+    pygame.display.set_caption("SeismicPyGL — Simulador 3D de Terremotos (GLSL)")
+
+    # Captura o cursor do mouse para visão em primeira pessoa
     pygame.event.set_grab(True)
     pygame.mouse.set_visible(False)
-    pygame.mouse.get_rel()  # descarta o primeiro delta (costuma vir "sujo")
- 
+    pygame.mouse.get_rel()
+
     init_opengl()
- 
+
     clock = pygame.time.Clock()
-    camera = FreeCamera()
-    ground = Ground(size=100, divisions=30)
-    buildings = generate_city(rows=5, cols=5, spacing=5.0)
- 
-    # montanha posicionada num canto do cenário, longe da cidade
-    mountain_center = (32.0, 32.0)
-    mountain = Mountain(x=mountain_center[0], z=mountain_center[1],
-                         base_radius=12.0, height=22.0)
- 
-    # floresta em anel ao redor da montanha, sem invadir a área da cidade
+    camera = FreeCamera(position=(0.0, 9.0, 32.0), yaw=-90.0, pitch=-14.0)
+
+    # Entidades do mundo 3D
+    earthquake = EarthquakeSimulator()
+    ground = Ground(size=140.0, divisions=80)
+    buildings = generate_city(rows=5, cols=5, spacing=5.5)
+
+    mountain_center = (34.0, 34.0)
+    mountain = Mountain(x=mountain_center[0], z=mountain_center[1], base_radius=14.0, height=26.0)
     forest = generate_forest(
         count=45,
         center=mountain_center,
-        radius_range=(13.0, 28.0),
+        radius_range=(15.0, 30.0),
         avoid_center=(0.0, 0.0),
         avoid_radius=16.0,
     )
- 
-    earthquake = EarthquakeSimulator()
- 
+
+    # Shaders e Sistemas de Efeitos
+    scene_shader = ShaderProgram.from_files(
+        "assets/shaders/scene.vert",
+        "assets/shaders/scene.frag"
+    )
+    concrete_tex = get_concrete_texture()
+    particle_system = ParticleSystem(max_particles=800)
+    hud = HUD(WINDOW_SIZE[0], WINDOW_SIZE[1])
+
+    # Mapeamento de magnitudes Richter e trauma para as teclas 1 a 5
+    magnitudes = {K_1: 3.0, K_2: 4.5, K_3: 6.0, K_4: 7.2, K_5: 8.5}
+    trauma_map = {K_1: 0.25, K_2: 0.45, K_3: 0.65, K_4: 0.85, K_5: 1.0}
+
     running = True
     elapsed_time = 0.0
- 
+
     while running:
         dt = clock.tick(60) / 1000.0
+        # Limita dt anômalo para estabilidade numérica
+        dt = min(dt, 0.05)
         elapsed_time += dt
- 
+
+        # -------------------------------------------------------------------
+        # Processamento de Eventos e Teclado
+        # -------------------------------------------------------------------
         for event in pygame.event.get():
             if event.type == QUIT:
                 running = False
             elif event.type == KEYDOWN:
                 if event.key == K_ESCAPE:
                     running = False
+
                 elif event.key == K_SPACE:
-                    earthquake.trigger(current_time=elapsed_time)
+                    # Terremoto aleatório com intensidade moderada
+                    earthquake.trigger(current_time=elapsed_time, magnitude=5.5)
+                    camera.add_trauma(0.70)
+
+                elif event.key in magnitudes:
+                    # Teclas 1 a 5: magnitudes da Escala Richter calibradas
+                    mag = magnitudes[event.key]
+                    t_amt = trauma_map[event.key]
+                    earthquake.trigger(current_time=elapsed_time, magnitude=mag)
+                    camera.add_trauma(t_amt)
+
+                elif event.key == K_r:
+                    # Reset geral do cenário e dos prédios colapsados
+                    for b in buildings:
+                        b.reset()
+                    mountain.debris.clear()
+                    earthquake.stop()
+                    camera.trauma = 0.0
+
             elif event.type == MOUSEWHEEL:
                 camera.zoom(event.y)
- 
+
+        # Atualização da Câmera (movimento e screen shake)
         rel_x, rel_y = pygame.mouse.get_rel()
         camera.process_mouse(rel_x, rel_y)
         camera.process_keyboard(dt)
- 
-        # atualiza dano/colapso dos prédios e desmoronamento da montanha
-        for building in buildings:
-            building.update(earthquake, elapsed_time, dt)
+        camera.update_trauma(dt)
+
+        # Atualização física dos objetos
+        for b in buildings:
+            b.update(earthquake, elapsed_time, dt, particle_system=particle_system)
         mountain.update(earthquake, elapsed_time, dt)
- 
+        particle_system.update(dt)
+
+        # -------------------------------------------------------------------
+        # Renderização 3D (Pipeline Programável)
+        # -------------------------------------------------------------------
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glLoadIdentity()
-        apply_projection(camera.fov)
-        camera.apply()
- 
-        ground.draw(earthquake, elapsed_time)
-        mountain.draw()
+
+        view_matrix = camera.get_view_matrix()
+        proj_matrix = perspective(camera.fov, ASPECT_RATIO, 0.1, 1000.0)
+
+        # 1. Chão deformável com onda sísmica na GPU
+        ground.draw(earthquake, elapsed_time, view_matrix, proj_matrix)
+
+        # 2. Objetos da Cena (Prédios, Montanha, Árvores) com Iluminação Phong
+        scene_shader.use()
+        scene_shader.set_uniform_mat4("u_view", view_matrix)
+        scene_shader.set_uniform_mat4("u_projection", proj_matrix)
+        scene_shader.set_uniform_vec3("u_light_direction", (-0.4, -1.0, -0.3))
+        scene_shader.set_uniform_vec3("u_light_color", (1.0, 0.98, 0.92))
+        scene_shader.set_uniform_vec3("u_ambient_color", (0.35, 0.38, 0.42))
+
+        # Prédios (com textura de concreto)
+        scene_shader.set_uniform_int("u_use_texture", 1)
+        scene_shader.set_uniform_int("u_texture", 0)
+        glBindTexture(GL_TEXTURE_2D, concrete_tex)
+        for b in buildings:
+            b.draw(scene_shader, earthquake, elapsed_time)
+
+        # Montanha e destroços
+        scene_shader.set_uniform_int("u_use_texture", 0)
+        mountain.draw(scene_shader)
+
+        # Floresta / Árvores
         for tree in forest:
-            tree.draw(earthquake, elapsed_time)
-        for building in buildings:
-            building.draw(earthquake, elapsed_time)
- 
+            tree.draw(scene_shader, earthquake, elapsed_time)
+
+        scene_shader.stop()
+        glBindTexture(GL_TEXTURE_2D, 0)
+
+        # 3. Partículas de fumaça e poeira com Billboards e Alpha Blending
+        particle_system.draw(view_matrix, proj_matrix)
+
+        # 4. HUD 2D com isolamento de profundidade (Issue #18)
+        hud.draw(
+            WINDOW_SIZE[0], WINDOW_SIZE[1],
+            earthquake=earthquake,
+            camera=camera,
+            buildings=buildings,
+            fps=clock.get_fps()
+        )
+
         pygame.display.flip()
- 
+
+    # -----------------------------------------------------------------------
+    # Finalização e Limpeza de Memória GPU (Issue #19)
+    # -----------------------------------------------------------------------
+    ground.cleanup()
+    mountain.cleanup()
+    particle_system.cleanup()
+    hud.cleanup()
+    scene_shader.cleanup()
+    cleanup_textures()
+
     pygame.quit()
     sys.exit()
- 
- 
+
+
 if __name__ == "__main__":
     main()
- 
- 
