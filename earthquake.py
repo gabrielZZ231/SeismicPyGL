@@ -1,8 +1,6 @@
 """
-Lógica pura do terremoto: onde ele começa, como se propaga e como
-decai com o tempo e a distância. Não sabe nada de OpenGL — só
-matemática. Isso deixa fácil testar/ajustar a física sem mexer no
-código de desenho.
+Lógica do simulador de terremotos (física e parâmetros da onda sísmica).
+Fornece parâmetros para os shaders da GPU e para cálculos na CPU.
 """
 
 import math
@@ -20,29 +18,33 @@ class EarthquakeSimulator:
         self.active = False
         self.epicenter = (0.0, 0.0)
         self.start_time = 0.0
-        self.magnitude = 1.0        # amplitude inicial do tremor
-        self.wave_speed = 6.0       # unidades de cena por segundo
-        self.frequency = 3.0        # Hz da vibração
-        self.damping = 0.35         # decaimento por segundo (no tempo)
-        self.spatial_falloff = 0.08  # decaimento por unidade de distância
+        self.richter_magnitude = 0.0
+        self.magnitude = 0.0        # amplitude da vibração mecânica
+        self.wave_speed = 10.0      # unidades de cena por segundo
+        self.frequency = 2.5        # Hz da vibração
+        self.damping = 0.25         # decaimento temporal
+        self.spatial_falloff = 0.05 # decaimento espacial
 
-    def trigger(self, current_time, epicenter=None, magnitude=1.4):
-        """Inicia um novo terremoto. Se epicenter=None, sorteia um ponto."""
+    def trigger(self, current_time: float = 0.0, epicenter=None, magnitude: float = 5.0):
+        """Inicia um novo terremoto com magnitude Richter e epicentro."""
         self.epicenter = epicenter or (
-            random.uniform(-15, 15), random.uniform(-15, 15)
+            random.uniform(-10, 10), random.uniform(-10, 10)
         )
-        self.magnitude = magnitude
-        self.start_time = current_time
+        self.richter_magnitude = float(magnitude)
+        # Escala a amplitude da deformação visual com a escala Richter
+        self.magnitude = max(0.4, float(magnitude) * 0.28)
+        self.start_time = float(current_time)
         self.active = True
 
     def stop(self):
         self.active = False
+        self.magnitude = 0.0
+        self.richter_magnitude = 0.0
 
-    def get_offset(self, x, z, current_time):
+    def get_offset(self, x: float, z: float, current_time: float):
         """
-        Retorna o deslocamento (dx, dy, dz) que o ponto (x, z) deve
-        sofrer no instante current_time. Devolve (0, 0, 0) se não há
-        terremoto ativo ou se a onda ainda não chegou nesse ponto.
+        Retorna o deslocamento (dx, dy, dz) que o ponto (x, z) sofre
+        no instante current_time. Devolve (0, 0, 0) se não há tremor.
         """
         if not self.active:
             return 0.0, 0.0, 0.0
@@ -52,8 +54,6 @@ class EarthquakeSimulator:
             return 0.0, 0.0, 0.0
 
         dist = math.hypot(x - self.epicenter[0], z - self.epicenter[1])
-
-        # a onda demora pra "chegar" em pontos distantes do epicentro
         arrival = dist / self.wave_speed
         local_t = elapsed - arrival
         if local_t < 0:
@@ -63,11 +63,11 @@ class EarthquakeSimulator:
         spatial_decay = math.exp(-self.spatial_falloff * dist)
         amplitude = self.magnitude * temporal_decay * spatial_decay
 
-        if amplitude < 0.001:
+        if amplitude < 0.005:
             return 0.0, 0.0, 0.0
 
-        phase = 2 * math.pi * self.frequency * local_t
+        phase = 2.0 * math.pi * self.frequency * local_t
         dy = amplitude * math.sin(phase)
-        dx = amplitude * 0.4 * math.sin(phase * 0.6 + dist)
-        dz = amplitude * 0.4 * math.cos(phase * 0.6 + dist)
+        dx = amplitude * 0.35 * math.sin(phase * 0.7 + dist)
+        dz = amplitude * 0.35 * math.cos(phase * 0.7 + dist)
         return dx, dy, dz
