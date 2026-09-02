@@ -23,7 +23,7 @@ from math_utils import look_at, perlin1d
 
 class FreeCamera:
     def __init__(self, position=(0.0, 5.0, 36.0), yaw=-90.0, pitch=-7.0,
-                 move_speed=15.0, sprint_multiplier=3.0, mouse_sensitivity=0.028,
+                 move_speed=15.0, sprint_multiplier=3.0, mouse_sensitivity=0.10,
                  fov=55.0, zoom_speed=3.0, fov_min=20.0, fov_max=90.0):
         self.x, self.y, self.z = position
         self.yaw = yaw       # graus; -90 aponta para -Z (olhando para o centro da vila em 0,0)
@@ -107,24 +107,20 @@ class FreeCamera:
 
     def process_mouse(self, rel_x, rel_y):
         """
-        Atualiza ângulos com suavização exponencial para eliminar sobressaltos e nervosismo.
+        Atualiza ângulos da câmera a partir do delta do mouse.
+        Aplica filtro leve anti-jitter sem introduzir inércia.
         """
         # Ignora deltas anômalos ao capturar/soltar foco da janela
         if abs(rel_x) > 250 or abs(rel_y) > 250:
             return
 
-        target_yaw_vel = rel_x * self.mouse_sensitivity
-        target_pitch_vel = rel_y * self.mouse_sensitivity
+        # Aplica o delta diretamente — sem acúmulo de velocidade/inércia
+        dx = rel_x * self.mouse_sensitivity
+        dy = rel_y * self.mouse_sensitivity
 
-        # Interpolação suave (lerp/filtro exponencial)
-        a = self.smooth_alpha
-        self._smooth_yaw_vel = (1.0 - a) * self._smooth_yaw_vel + a * target_yaw_vel
-        self._smooth_pitch_vel = (1.0 - a) * self._smooth_pitch_vel + a * target_pitch_vel
-
-        self.yaw += self._smooth_yaw_vel
-        self.pitch -= self._smooth_pitch_vel
+        self.yaw += dx
+        self.pitch -= dy
         self.pitch = max(-84.0, min(84.0, self.pitch))
-        self.yaw = (self.yaw + 180.0) % 360.0 - 180.0
 
     def _base_forward_vector(self):
         """Vetor de direção puro (sem shake) para movimentação do jogador no plano."""
