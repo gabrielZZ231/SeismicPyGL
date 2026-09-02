@@ -1,78 +1,88 @@
-# Simulador de Terremoto — Protótipo (PyOpenGL)
+# SeismicPyGL 3D — Simulador de Terremotos (PyOpenGL + Pygame)
 
-Protótipo simples e organizado de um simulador de terremoto: uma "cidade"
-de prédios em cima de um chão em grade, onde uma onda sísmica se propaga
-a partir de um epicentro e faz tudo balançar.
+Simulador 3D de terremotos de alto desempenho em Python com **Pygame + PyOpenGL**, utilizando **pipeline programável moderno (GLSL 3.3 Core)**, buffers VBO/VAO, câmera com screen shake por trauma amortecido por Ruído de Perlin, deformação de terreno por onda senoidal diretamente na GPU, modelo físico de colapso de edifícios, partículas de poeira e fumaça com billboarding esférico e alpha blending, e HUD 2D com isolamento de profundidade.
 
-## Como rodar
+![Demonstração da Simulação](screenshot_simulation.png)
+
+---
+
+## 🎮 Controles Interativos
+
+| Tecla / Ação | Função |
+| :--- | :--- |
+| `W` | Anda para frente na direção da visão |
+| `A` | Anda para a esquerda |
+| `D` | Anda para a direita |
+| `S` | Desce verticalmente |
+| `SHIFT` | Corrida rápida (sprint) |
+| `MOUSE` | Visão livre 3D (Pitch e Yaw com Euler angles) |
+| `SCROLL` | Zoom na câmera (FOV dinâmico) |
+| `ESPAÇO` | Dispara terremoto de magnitude intermediária (5.5 Richter) |
+| `1` a `5` | Dispara terremotos em intensidades calibradas (3.0 a 8.5 na Escala Richter) |
+| `R` | Reseta a cidade, remove destroços e zera o trauma |
+| `ESC` | Fecha o simulador com liberação segura de recursos |
+
+---
+
+## 🛠️ Tecnologias e Arquitetura
+
+- **Pipeline Programável Moderno (GLSL 3.3 Core):** Sem `glBegin/glEnd` ou matrizes de função fixa legadas.
+- **Deformação de Terreno na GPU (`ground.vert`):** A equação de onda radial senoidal e o recálculo analítico dos vetores normais são executados inteiramente nos núcleos da GPU.
+- **Screen Shake por Trauma (`camera.py` + `math_utils.py`):** Modelo de trauma $[0.0, 1.0]$ com queda cúbica ($Trauma^3$) e amostragem de Ruído de Perlin para dessincronizar Pitch, Yaw, Roll e Translação.
+- **Colapso Estrutural com Efeito Chicote (`scene.py`):** Edifícios fatiados que acumulam dano mecânico, sofrem inclinação progressiva e afundamento na base no eixo Y ($M = T \times R \times S$).
+- **Sistema de Partículas (`particles.py`):** Billboarding esférico extraído da View Matrix com textura em gradiente radial suave e `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`.
+- **HUD 2D Ortográfico (`hud.py`):** Exibe métricas em tempo real (Escala Richter, trauma da câmera, contador de prédios e FPS) com isolamento total do buffer de profundidade (`glDisable(GL_DEPTH_TEST)`).
+
+---
+
+## 📦 Como Instalar e Executar
+
+### 1. Criar ambiente virtual (recomendado)
 
 ```bash
-pip install pygame PyOpenGL PyOpenGL_accelerate
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate    # Windows
+```
+
+### 2. Instalar dependências
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Executar o simulador
+
+```bash
 python main.py
 ```
 
-**Controles:**
-- `ESPAÇO` → dispara um terremoto em um epicentro aleatório
-- `ESC` → sai
+---
 
-## Estrutura do projeto
+## 📁 Estrutura do Projeto
 
 ```
-earthquake_sim/
-├── main.py         # ponto de entrada: janela, loop principal, eventos
-├── earthquake.py   # física da onda sísmica (sem nenhuma linha de OpenGL)
-├── scene.py        # objetos visuais: Ground (chão) e Building (prédios)
-├── camera.py        # câmera simples que orbita a cena
+SeismicPyGL/
+├── main.py                     # Loop de eventos, orquestração e render pass
+├── camera.py                   # FreeCamera com Euler angles + Trauma/Perlin Screen Shake
+├── math_utils.py               # Matrizes 4x4 (MVP), vetores e Perlin Noise 1D/2D puro
+├── shader.py                   # Gerenciador e compilador de Programas GLSL
+├── mesh.py                     # Gerenciador de VBO / VAO com dados entrelaçados
+├── obj_loader.py               # Leitor Wavefront .obj e geradores procedurais
+├── texture.py                  # Loader de texturas via PIL e geradores procedurais
+├── earthquake.py               # Física sísmica, propagação de ondas e parâmetros Richter
+├── scene.py                    # Entidades da cena: Ground, Building, Mountain, Tree
+├── particles.py                # Sistema de partículas com Billboards & Alpha Blending
+├── hud.py                      # Interface 2D com Pygame Font e projeção ortográfica
+├── assets/
+│   ├── shaders/
+│   │   ├── scene.vert / scene.frag          # Iluminação Phong + Texturas
+│   │   ├── ground.vert / ground.frag        # Deformação da onda sísmica na GPU
+│   │   ├── billboard.vert / billboard.frag  # Partículas de fumaça e poeira
+│   │   └── hud.vert / hud.frag              # Projeção ortográfica 2D
+│   ├── textures/                            # Texturas de concreto, grama e fumaça
+│   └── models/                              # Modelos 3D .obj
+├── requirements.txt            # Dependências fixadas
+├── STATUS_ISSUES.md            # Auditoria de 22/22 requisitos concluídos
 └── README.md
 ```
-
-A ideia de separar assim: **`earthquake.py` não sabe que existe uma
-tela** — ele só calcula deslocamento (dx, dy, dz) para qualquer ponto
-(x, z) em qualquer instante de tempo. Isso facilita testar a física
-sozinha (dá pra rodar em um script sem abrir janela nenhuma, como fizemos
-para validar) e facilita trocar a forma de desenhar sem mexer na
-simulação.
-
-## Como a simulação funciona
-
-- `EarthquakeSimulator` guarda um epicentro `(x, z)`, um instante de
-  início, e parâmetros de magnitude/frequência/decaimento.
-- `get_offset(x, z, tempo)` calcula:
-  1. a distância do ponto até o epicentro;
-  2. quanto tempo a "frente de onda" leva pra chegar até lá
-     (`distância / velocidade`);
-  3. a amplitude da vibração naquele ponto e instante, decaindo tanto
-     no tempo (quanto mais tempo passou, mais fraco) quanto no espaço
-     (quanto mais longe do epicentro, mais fraco).
-- `Ground` usa esse deslocamento para ondular a grade do chão.
-- `Building` usa o mesmo deslocamento, mas desenha o prédio em fatias
-  horizontais e multiplica o deslocamento pela altura da fatia — assim
-  o topo do prédio balança mais que a base (efeito "chicote"), que é o
-  comportamento visualmente mais reconhecível de um terremoto.
-
-## Sugestões de próximos passos para o grupo
-
-Em ordem de dificuldade crescente:
-
-1. **Painel de controle simples** — trocar `ESPAÇO` fixo por teclas que
-   ajustam `magnitude`, `frequency` e `wave_speed` em tempo real, para
-   comparar terremotos fracos vs. fortes.
-2. **Clique para escolher o epicentro** — usar `pygame.mouse` +
-   `gluUnProject` para converter o clique do mouse em uma posição no
-   chão, em vez de sortear aleatoriamente.
-3. **Câmera controlável** — trocar `OrbitCamera` (que gira sozinha) por
-   uma câmera livre (WASD + mouse look), útil pra "andar" pela cidade
-   durante o tremor.
-4. **Colapso de prédios** — quando a amplitude acumulada em um prédio
-   passar de um limite, trocar sua cor pra vermelho e, com mais tempo
-   disponível, simular queda (interpolar a altura até zero).
-5. **Texturas e iluminação** — hoje os objetos são cor sólida via
-   `glColor3f`; dá pra evoluir para luz direcional (`GL_LIGHTING`) e
-   texturas simples (concreto/vidro) sem mudar a estrutura do projeto.
-6. **Sismógrafo na tela** — um HUD 2D simples (desenhado por cima da
-   cena 3D) mostrando a amplitude no ponto onde a câmera está olhando,
-   como um gráfico em tempo real.
-
-Cada um desses pode virar um arquivo novo (`hud.py`, `controls.py`,
-etc.) sem precisar reescrever o que já existe — essa é a vantagem de já
-começar organizado.
