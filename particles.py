@@ -66,7 +66,7 @@ class Particle:
 
 
 class ParticleSystem:
-    def __init__(self, max_particles=600):
+    def __init__(self, max_particles=6000):
         self.max_particles = max_particles
         self.particles = []
 

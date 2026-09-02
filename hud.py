@@ -126,7 +126,7 @@ class HUD:
         glBindTexture(GL_TEXTURE_2D, tex_id)
         self.unit_quad.draw()
 
-    def draw(self, screen_width: int, screen_height: int, earthquake, camera, buildings, fps: float):
+    def draw(self, screen_width: int, screen_height: int, earthquake, camera, buildings, houses, fps: float):
         """
         Renderiza o HUD 2D completo com isolamento de profundidade.
         """
@@ -147,7 +147,7 @@ class HUD:
 
         # 1. Painel Superior Esquerdo: Informações Sísmicas e Métricas
         panel_w = 340
-        panel_h = 175
+        panel_h = 195
         self._draw_quad(15, 15, panel_w, panel_h, self.white_tex, (0.05, 0.08, 0.12, 0.78))
 
         # Borda sutil do painel
@@ -194,10 +194,14 @@ class HUD:
 
         # Contagem de Prédios
         total_b = len(buildings)
-        collapsed = sum(1 for b in buildings if b.collapse_progress >= 0.95)
-        collapsing = sum(1 for b in buildings if b.collapsing and b.collapse_progress < 0.95)
-        intact = total_b - collapsed - collapsing
-        b_text = f"Edifícios: {intact} intactos | {collapsing} em queda | {collapsed} escombros"
+        collapsed_b = sum(1 for b in buildings if b.collapse_progress >= 0.95)
+        intact_b = total_b - collapsed_b
+        
+        total_h = len(houses)
+        collapsed_h = sum(1 for h in houses if h.collapse_progress >= 0.95)
+        intact_h = total_h - collapsed_h
+        
+        b_text = f"Prédios: {intact_b}/{total_b} | Casas: {intact_h}/{total_h}"
         lbl_b = self._get_label("buildings", self.body_font, b_text, (200, 220, 240))
         lbl_b.set_text(b_text)
         self._draw_quad(25, 110, lbl_b.width, lbl_b.height, lbl_b.tex_id)

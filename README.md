@@ -13,13 +13,13 @@ Simulador 3D de terremotos de alto desempenho em Python com **Pygame + PyOpenGL*
 | `W` | Anda para frente na direção da visão |
 | `A` | Anda para a esquerda |
 | `D` | Anda para a direita |
-| `S` | Desce verticalmente |
+| `S` | Anda para trás (a câmera permanece na altura do chão) |
 | `SHIFT` | Corrida rápida (sprint) |
-| `MOUSE` | Visão livre 3D (Pitch e Yaw com Euler angles) |
+| `MOUSE` | Olha ao redor com sensibilidade controlada (limite vertical para evitar inversão) |
 | `SCROLL` | Zoom na câmera (FOV dinâmico) |
 | `ESPAÇO` | Dispara terremoto de magnitude intermediária (5.5 Richter) |
 | `1` a `5` | Dispara terremotos em intensidades calibradas (3.0 a 8.5 na Escala Richter) |
-| `R` | Reseta a cidade, remove destroços e zera o trauma |
+| `R` | Reseta a cidade, remove destroços e restaura a câmera inicial |
 | `ESC` | Fecha o simulador com liberação segura de recursos |
 
 ---

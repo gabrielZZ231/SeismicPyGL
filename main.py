@@ -30,8 +30,8 @@ from math_utils import perspective
 from camera import FreeCamera
 from earthquake import EarthquakeSimulator
 from scene import (
-    Ground, generate_city, Mountain, generate_forest,
-    get_concrete_texture,
+    Ground, generate_village, Mountain, generate_forest,
+    get_concrete_texture, Street
 )
 from particles import ParticleSystem
 from hud import HUD
@@ -61,21 +61,25 @@ def main():
     init_opengl()
 
     clock = pygame.time.Clock()
-    camera = FreeCamera(position=(0.0, 9.0, 32.0), yaw=-90.0, pitch=-14.0)
+    
+    # Enquadra o centro da vila já no primeiro frame.
+    camera = FreeCamera(position=(0.0, 5.0, 36.0), yaw=-90.0, pitch=-7.0,
+                        mouse_sensitivity=0.028)
 
     # Entidades do mundo 3D
     earthquake = EarthquakeSimulator()
     ground = Ground(size=140.0, divisions=80)
-    buildings = generate_city(rows=5, cols=5, spacing=5.5)
+    
+    buildings, houses, streets = generate_village(center=(0.0, 0.0), building_count=9, house_count=24)
+    all_buildings = buildings + houses
 
-    mountain_center = (34.0, 34.0)
+    mountain_center = (48.0, 48.0)
     mountain = Mountain(x=mountain_center[0], z=mountain_center[1], base_radius=14.0, height=26.0)
     forest = generate_forest(
-        count=45,
-        center=mountain_center,
-        radius_range=(15.0, 30.0),
-        avoid_center=(0.0, 0.0),
-        avoid_radius=16.0,
+        count=80,
+        center=(0.0, 0.0),
+        radius_range=(18.0, 55.0),
+        avoid_zones=[(0.0, 0.0, 16.0), (48.0, 48.0, 16.0)]
     )
 
     # Shaders e Sistemas de Efeitos
@@ -84,15 +88,16 @@ def main():
         "assets/shaders/scene.frag"
     )
     concrete_tex = get_concrete_texture()
-    particle_system = ParticleSystem(max_particles=800)
+    particle_system = ParticleSystem(max_particles=6000)
     hud = HUD(WINDOW_SIZE[0], WINDOW_SIZE[1])
 
     # Mapeamento de magnitudes Richter e trauma para as teclas 1 a 5
     magnitudes = {K_1: 3.0, K_2: 4.5, K_3: 6.0, K_4: 7.2, K_5: 8.5}
-    trauma_map = {K_1: 0.25, K_2: 0.45, K_3: 0.65, K_4: 0.85, K_5: 1.0}
+    trauma_map = {K_1: 0.25, K_2: 0.45, K_3: 0.65, K_4: 0.95, K_5: 1.0}
 
     running = True
     elapsed_time = 0.0
+    first_frame = True
 
     while running:
         dt = clock.tick(60) / 1000.0
@@ -123,25 +128,33 @@ def main():
                     camera.add_trauma(t_amt)
 
                 elif event.key == K_r:
-                    # Reset geral do cenário e dos prédios colapsados
-                    for b in buildings:
+                    # Reset geral do cenário
+                    for b in all_buildings:
                         b.reset()
+                    for tree in forest:
+                        tree.reset()
                     mountain.debris.clear()
                     earthquake.stop()
-                    camera.trauma = 0.0
+                    camera.reset_view()
 
             elif event.type == MOUSEWHEEL:
                 camera.zoom(event.y)
 
         # Atualização da Câmera (movimento e screen shake)
         rel_x, rel_y = pygame.mouse.get_rel()
-        camera.process_mouse(rel_x, rel_y)
+        if first_frame:
+            first_frame = False
+        else:
+            camera.process_mouse(rel_x, rel_y)
+            
         camera.process_keyboard(dt)
         camera.update_trauma(dt)
 
         # Atualização física dos objetos
-        for b in buildings:
+        for b in all_buildings:
             b.update(earthquake, elapsed_time, dt, particle_system=particle_system)
+        for tree in forest:
+            tree.update(earthquake, elapsed_time, dt)
         mountain.update(earthquake, elapsed_time, dt)
         particle_system.update(dt)
 
@@ -156,7 +169,7 @@ def main():
         # 1. Chão deformável com onda sísmica na GPU
         ground.draw(earthquake, elapsed_time, view_matrix, proj_matrix)
 
-        # 2. Objetos da Cena (Prédios, Montanha, Árvores) com Iluminação Phong
+        # 2. Objetos da Cena (Prédios, Casas, Montanha, Árvores) com Iluminação Phong
         scene_shader.use()
         scene_shader.set_uniform_mat4("u_view", view_matrix)
         scene_shader.set_uniform_mat4("u_projection", proj_matrix)
@@ -164,16 +177,27 @@ def main():
         scene_shader.set_uniform_vec3("u_light_color", (1.0, 0.98, 0.92))
         scene_shader.set_uniform_vec3("u_ambient_color", (0.35, 0.38, 0.42))
 
-        # Prédios (com textura de concreto)
+        # Ruas (asfalto)
         scene_shader.set_uniform_int("u_use_texture", 1)
+        scene_shader.set_uniform_int("u_building_facade", 0)
+        scene_shader.set_uniform_int("u_texture", 0)
+        for s in streets:
+            s.draw(scene_shader, earthquake, elapsed_time)
+
+        # Prédios e Casas (com textura de concreto para prédios, mas usaremos para ambos para simplificar a draw call base)
+        scene_shader.set_uniform_int("u_use_texture", 1)
+        scene_shader.set_uniform_int("u_building_facade", 1)
         scene_shader.set_uniform_int("u_texture", 0)
         glBindTexture(GL_TEXTURE_2D, concrete_tex)
-        for b in buildings:
+        for b in all_buildings:
             b.draw(scene_shader, earthquake, elapsed_time)
 
         # Montanha e destroços
         scene_shader.set_uniform_int("u_use_texture", 0)
+        scene_shader.set_uniform_int("u_building_facade", 0)
+        scene_shader.set_uniform_int("u_mountain_stratum", 1)
         mountain.draw(scene_shader)
+        scene_shader.set_uniform_int("u_mountain_stratum", 0)
 
         # Floresta / Árvores
         for tree in forest:
@@ -185,21 +209,26 @@ def main():
         # 3. Partículas de fumaça e poeira com Billboards e Alpha Blending
         particle_system.draw(view_matrix, proj_matrix)
 
-        # 4. HUD 2D com isolamento de profundidade (Issue #18)
+        # 4. HUD 2D com isolamento de profundidade
         hud.draw(
             WINDOW_SIZE[0], WINDOW_SIZE[1],
             earthquake=earthquake,
             camera=camera,
             buildings=buildings,
+            houses=houses,
             fps=clock.get_fps()
         )
 
         pygame.display.flip()
 
     # -----------------------------------------------------------------------
-    # Finalização e Limpeza de Memória GPU (Issue #19)
+    # Finalização e Limpeza de Memória GPU
     # -----------------------------------------------------------------------
     ground.cleanup()
+    # Limpeza dos prédios/casas, desnecessário para ruas
+    for b in all_buildings:
+        if hasattr(b, "cleanup"):
+            b.cleanup()
     mountain.cleanup()
     particle_system.cleanup()
     hud.cleanup()

@@ -59,6 +59,8 @@ def load_texture(path: str, wrap=GL_REPEAT) -> int:
             return create_smoke_particle_texture()
         elif "grass" in basename or "ground" in basename:
             return create_grass_texture()
+        elif "asphalt" in basename or "road" in basename:
+            return create_asphalt_texture()
         else:
             return create_concrete_texture()
 
@@ -125,6 +127,34 @@ def create_smoke_particle_texture(size=64) -> int:
 
     img = Image.fromarray(arr, "RGBA")
     return create_texture_from_image(img, wrap=GL_CLAMP_TO_EDGE)
+
+
+def create_asphalt_texture(size=128) -> int:
+    """Gera textura procedural de asfalto com ruído e faixa central amarela."""
+    rng = np.random.default_rng(789)
+    base = rng.integers(45, 65, (size, size), dtype=np.uint8)
+    noise = rng.integers(-8, 9, (size, size), dtype=np.int16)
+    asphalt = np.clip(base + noise, 0, 255).astype(np.uint8)
+    
+    rgba = np.zeros((size, size, 4), dtype=np.uint8)
+    rgba[:, :, 0] = asphalt
+    rgba[:, :, 1] = asphalt
+    rgba[:, :, 2] = (asphalt * 0.92).astype(np.uint8)
+    rgba[:, :, 3] = 255
+    
+    # Faixa central amarela tracejada
+    center = size // 2
+    stripe_width = max(2, size // 32)
+    dash_length = size // 8
+    for y in range(size):
+        if (y // dash_length) % 2 == 0:
+            for x in range(center - stripe_width, center + stripe_width):
+                rgba[y, x, 0] = 210
+                rgba[y, x, 1] = 190
+                rgba[y, x, 2] = 50
+    
+    img = Image.fromarray(rgba, "RGBA")
+    return create_texture_from_image(img)
 
 
 def create_blank_white_texture() -> int:

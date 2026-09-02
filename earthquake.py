@@ -32,7 +32,11 @@ class EarthquakeSimulator:
         )
         self.richter_magnitude = float(magnitude)
         # Escala a amplitude da deformação visual com a escala Richter
-        self.magnitude = max(0.4, float(magnitude) * 0.28)
+        self.magnitude = max(0.4, float(magnitude) * 0.42)
+        if self.richter_magnitude >= 7.0:
+            self.damping = 0.15
+        else:
+            self.damping = 0.25
         self.start_time = float(current_time)
         self.active = True
 
@@ -40,6 +44,7 @@ class EarthquakeSimulator:
         self.active = False
         self.magnitude = 0.0
         self.richter_magnitude = 0.0
+        self.damping = 0.25
 
     def get_offset(self, x: float, z: float, current_time: float):
         """

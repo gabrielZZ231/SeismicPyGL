@@ -1,12 +1,18 @@
 """
 Câmera livre 3D estilo primeira pessoa com suporte a:
-- Movimentação livre (WASD, Shift sprint, descida S)
-- Rotação via mouse (Euler angles: Pitch e Yaw)
+- Movimentação livre corrigida (WASD, Shift sprint, S navega para trás, A esquerda, D direita)
+- Rotação via mouse suave com interpolação exponencial (Euler angles: Pitch e Yaw)
+- Centralização inicial mirando no centro da vila (0, 0)
 - Zoom via FOV dinâmico (Mouse Wheel)
 - Sistema de Trauma & Screen Shake com Ruído de Perlin (Pitch, Yaw, Roll e Translação)
 - Matriz de visualização 4x4 (get_view_matrix) para Shaders GLSL modernos
 - Compatibilidade com gluLookAt (apply)
 """
+
+import os
+import sys
+if sys.platform.startswith("linux") and "PYOPENGL_PLATFORM" not in os.environ:
+    os.environ["PYOPENGL_PLATFORM"] = "glx"
 
 import math
 import numpy as np
@@ -16,15 +22,23 @@ from math_utils import look_at, perlin1d
 
 
 class FreeCamera:
-    def __init__(self, position=(0.0, 8.0, 30.0), yaw=-90.0, pitch=-15.0,
-                 move_speed=15.0, sprint_multiplier=3.0, mouse_sensitivity=0.12,
+    def __init__(self, position=(0.0, 5.0, 36.0), yaw=-90.0, pitch=-7.0,
+                 move_speed=15.0, sprint_multiplier=3.0, mouse_sensitivity=0.028,
                  fov=55.0, zoom_speed=3.0, fov_min=20.0, fov_max=90.0):
         self.x, self.y, self.z = position
-        self.yaw = yaw       # graus; -90 aponta para -Z (padrão OpenGL)
-        self.pitch = pitch   # graus; limitado para não "virar de cabeça pra baixo"
+        self.yaw = yaw       # graus; -90 aponta para -Z (olhando para o centro da vila em 0,0)
+        self.pitch = pitch   # graus; ligeiramente inclinado para baixo
+        self._initial_pose = (0.0, 5.0, 36.0, -90.0, -7.0)
         self.move_speed = move_speed
         self.sprint_multiplier = sprint_multiplier
         self.mouse_sensitivity = mouse_sensitivity
+        self.eye_height = 2.5
+        self.world_bounds = 68.0
+
+        # Suavização (smoothing) do mouse para eliminar tremores de delta bruto
+        self._smooth_yaw_vel = 0.0
+        self._smooth_pitch_vel = 0.0
+        self.smooth_alpha = 0.40
 
         self.fov = fov               # campo de visão atual (graus)
         self.zoom_speed = zoom_speed
@@ -48,6 +62,15 @@ class FreeCamera:
         self._shake_pitch = 0.0
         self._shake_roll = 0.0
         self._shake_pos = (0.0, 0.0, 0.0)
+
+    def reset_view(self):
+        """Volta a câmera para o enquadramento inicial centralizado e remove o tremor."""
+        self.x, self.y, self.z, self.yaw, self.pitch = self._initial_pose
+        self.trauma = 0.0
+        self._shake_yaw = self._shake_pitch = self._shake_roll = 0.0
+        self._shake_pos = (0.0, 0.0, 0.0)
+        self._smooth_yaw_vel = 0.0
+        self._smooth_pitch_vel = 0.0
 
     def add_trauma(self, amount: float):
         """Injeta trauma no intervalo [0.0, 1.0]."""
@@ -83,10 +106,25 @@ class FreeCamera:
         self.fov = max(self.fov_min, min(self.fov_max, self.fov))
 
     def process_mouse(self, rel_x, rel_y):
-        """rel_x/rel_y vêm de pygame.mouse.get_rel(), em pixels desde o último frame."""
-        self.yaw += rel_x * self.mouse_sensitivity
-        self.pitch -= rel_y * self.mouse_sensitivity
-        self.pitch = max(-89.0, min(89.0, self.pitch))
+        """
+        Atualiza ângulos com suavização exponencial para eliminar sobressaltos e nervosismo.
+        """
+        # Ignora deltas anômalos ao capturar/soltar foco da janela
+        if abs(rel_x) > 250 or abs(rel_y) > 250:
+            return
+
+        target_yaw_vel = rel_x * self.mouse_sensitivity
+        target_pitch_vel = rel_y * self.mouse_sensitivity
+
+        # Interpolação suave (lerp/filtro exponencial)
+        a = self.smooth_alpha
+        self._smooth_yaw_vel = (1.0 - a) * self._smooth_yaw_vel + a * target_yaw_vel
+        self._smooth_pitch_vel = (1.0 - a) * self._smooth_pitch_vel + a * target_pitch_vel
+
+        self.yaw += self._smooth_yaw_vel
+        self.pitch -= self._smooth_pitch_vel
+        self.pitch = max(-84.0, min(84.0, self.pitch))
+        self.yaw = (self.yaw + 180.0) % 360.0 - 180.0
 
     def _base_forward_vector(self):
         """Vetor de direção puro (sem shake) para movimentação do jogador no plano."""
@@ -99,14 +137,17 @@ class FreeCamera:
 
     def process_keyboard(self, dt):
         """
-        W = frente, A = esquerda, D = direita, S = desce.
+        W = frente, S = trás, A = esquerda, D = direita.
         (Shift acelera.)
+        Vetor lateral corrigido para que D vá para a direita e A para a esquerda.
         """
         keys = pygame.key.get_pressed()
-        fx, fy, fz = self._base_forward_vector()
+        yaw_rad = math.radians(self.yaw)
+        fx, fz = math.cos(yaw_rad), math.sin(yaw_rad)
 
-        # vetor "direita", perpendicular ao forward e ao "up" mundial (0,1,0)
-        right_x, right_z = fz, -fx
+        # Vetor "direita" matematicamente correto: perpendicular ao vetor forward e ao UP (0,1,0)
+        # Se forward = (fx, 0, fz), direita = (-fz, 0, fx)
+        right_x, right_z = -fz, fx
         length = math.hypot(right_x, right_z) or 1.0
         right_x, right_z = right_x / length, right_z / length
 
@@ -115,23 +156,36 @@ class FreeCamera:
             speed *= self.sprint_multiplier
         step = speed * dt
 
+        move_x = move_z = 0.0
         if keys[pygame.K_w]:
-            self.x += fx * step
-            self.y += fy * step
-            self.z += fz * step
-        if keys[pygame.K_d]:
-            self.x += right_x * step
-            self.z += right_z * step
-        if keys[pygame.K_a]:
-            self.x -= right_x * step
-            self.z -= right_z * step
+            move_x += fx
+            move_z += fz
         if keys[pygame.K_s]:
-            self.y -= step
+            move_x -= fx
+            move_z -= fz
+        if keys[pygame.K_d]:
+            move_x += right_x
+            move_z += right_z
+        if keys[pygame.K_a]:
+            move_x -= right_x
+            move_z -= right_z
+
+        move_len = math.hypot(move_x, move_z)
+        if move_len > 0.0:
+            move_x /= move_len
+            move_z /= move_len
+            self.x += move_x * step
+            self.z += move_z * step
+
+        # Mantém a câmera dentro da área do mapa e acima do nível do solo
+        self.x = max(-self.world_bounds, min(self.world_bounds, self.x))
+        self.z = max(-self.world_bounds, min(self.world_bounds, self.z))
+        self.y = max(self.eye_height, self.y)
 
     def _get_camera_vectors(self):
         """Calcula eye, target e up com offsets de shake aplicados."""
         eff_yaw = self.yaw + self._shake_yaw
-        eff_pitch = max(-89.0, min(89.0, self.pitch + self._shake_pitch))
+        eff_pitch = max(-84.0, min(84.0, self.pitch + self._shake_pitch))
 
         yaw_rad = math.radians(eff_yaw)
         pitch_rad = math.radians(eff_pitch)
@@ -145,7 +199,7 @@ class FreeCamera:
 
         eye = np.array([
             self.x + self._shake_pos[0],
-            self.y + self._shake_pos[1],
+            max(self.eye_height, self.y + self._shake_pos[1]),
             self.z + self._shake_pos[2],
         ], dtype=np.float32)
 
