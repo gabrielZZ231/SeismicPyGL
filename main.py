@@ -182,7 +182,7 @@ def main():
         scene_shader.set_uniform_int("u_building_facade", 0)
         scene_shader.set_uniform_int("u_texture", 0)
         for s in streets:
-            s.draw(scene_shader, earthquake, elapsed_time)
+            s.draw(scene_shader)
 
         # Prédios e Casas (com textura de concreto para prédios, mas usaremos para ambos para simplificar a draw call base)
         scene_shader.set_uniform_int("u_use_texture", 1)
