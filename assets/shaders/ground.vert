@@ -3,10 +3,12 @@
 layout (location = 0) in vec3 a_position;
 layout (location = 1) in vec2 a_uv;
 layout (location = 2) in vec3 a_normal;
+layout (location = 3) in vec3 a_tangent;
 
 uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_light_space_matrix;
 
 uniform vec2 u_epicenter;
 uniform float u_time;
@@ -20,7 +22,9 @@ uniform float u_crack_intensity;
 
 out vec2 v_uv;
 out vec3 v_normal;
+out vec3 v_tangent;
 out vec3 v_frag_pos;
+out vec4 v_light_space_pos;
 
 vec2 random2(vec2 p) {
     return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
@@ -90,10 +94,11 @@ void main() {
 
     if (u_crack_intensity > 0.0) {
         float dist = distance(a_position.xz, u_epicenter);
-        float falloff = exp(-u_spatial_falloff * dist);
-        float crack_noise = voronoi_edge(a_position.xz * 0.5);
-        float crack_mask = smoothstep(0.05, 0.0, crack_noise) * falloff * u_crack_intensity;
-        pos.y -= crack_mask * 0.15;
+        float falloff = exp(-u_spatial_falloff * dist * 0.70);
+        float crack_noise = voronoi_edge(a_position.xz * 0.45);
+        float crack_width = 0.065 * (1.0 + u_crack_intensity * 0.85);
+        float crack_mask = smoothstep(crack_width, 0.005, crack_noise) * falloff * u_crack_intensity;
+        pos.y -= crack_mask * (0.18 + u_crack_intensity * 0.22);
     }
 
     vec4 world_pos = u_model * vec4(pos, 1.0);
@@ -101,7 +106,9 @@ void main() {
 
     mat3 normal_matrix = transpose(inverse(mat3(u_model)));
     v_normal = normalize(normal_matrix * norm);
+    v_tangent = normalize(normal_matrix * a_tangent);
     v_uv = a_uv;
+    v_light_space_pos = u_light_space_matrix * world_pos;
 
     gl_Position = u_projection * u_view * world_pos;
 }

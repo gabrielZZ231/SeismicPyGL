@@ -3,3 +3,5 @@ pillow==12.3.0
 pygame==2.6.1
 PyOpenGL==3.1.10
 PyOpenGL-accelerate==3.1.10
+opencv-python-headless
+openexr

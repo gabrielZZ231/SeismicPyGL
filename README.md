@@ -51,7 +51,18 @@ source .venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### 3. Executar o simulador
+### 3. Pré-processamento das texturas PBR (conversão EXR -> PNG 2K)
+
+Antes de rodar pela primeira vez com os pacotes PBR, execute o conversor otimizado de EXR para PNG:
+
+```bash
+python tools/convert_exr_textures.py
+```
+*(Para manter resolução 4K máxima sem redimensionamento para 2048x2048, use a flag `--full-4k`)*
+
+### 4. Executar o simulador
+
+O jogo detecta e ativa automaticamente a placa de vídeo dedicada (NVIDIA RTX) no Linux/WSL:
 
 ```bash
 python main.py

@@ -2,5 +2,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*Zone.Identifier*
 *.Zone.Identifier
 .DS_Store
+*.zip
+*.exr
+*.blend
+STATUS_ISSUES.md
+PROMPT_EXEC*
