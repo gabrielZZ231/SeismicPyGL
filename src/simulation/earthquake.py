@@ -19,6 +19,7 @@ class EarthquakeSimulator:
         self.epicenter = (0.0, 0.0)
         self.start_time = 0.0
         self.richter_magnitude = 0.0
+        self.max_richter = 0.0
         self.magnitude = 0.0        # amplitude da vibração mecânica
         self.wave_speed = 10.0      # unidades de cena por segundo
         self.frequency = 2.5        # Hz da vibração
@@ -31,6 +32,7 @@ class EarthquakeSimulator:
             random.uniform(-10, 10), random.uniform(-10, 10)
         )
         self.richter_magnitude = float(magnitude)
+        self.max_richter = max(self.max_richter, float(magnitude))
         # Escala a amplitude da deformação visual com a escala Richter
         self.magnitude = max(0.4, float(magnitude) * 0.42)
         if self.richter_magnitude >= 7.0:
@@ -40,11 +42,23 @@ class EarthquakeSimulator:
         self.start_time = float(current_time)
         self.active = True
 
+    def get_crack_intensity(self) -> float:
+        """Retorna a intensidade das rachaduras no solo e asfalto [0.0, 1.0]."""
+        effective_mag = self.max_richter if self.max_richter > 0 else self.richter_magnitude
+        if effective_mag < 3.8:
+            return 0.0
+        return min(1.0, (effective_mag - 3.8) / 4.2)
+
     def stop(self):
         self.active = False
         self.magnitude = 0.0
         self.richter_magnitude = 0.0
         self.damping = 0.25
+
+    def reset(self):
+        """Reset total da simulação sísmica e das fendas no asfalto/terreno."""
+        self.stop()
+        self.max_richter = 0.0
 
     def get_offset(self, x: float, z: float, current_time: float):
         """

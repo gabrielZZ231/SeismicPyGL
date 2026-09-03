@@ -7,17 +7,26 @@ Utiliza:
 - Textura com gradiente radial suave
 """
 
+import ctypes
 import math
 import random
 import numpy as np
 from OpenGL.GL import (
     glEnable, glDisable, glBlendFunc, glDepthMask,
-    glBindTexture, GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-    GL_TEXTURE_2D,
+    glBindTexture, glBindVertexArray, glGenBuffers, glBindBuffer, glBufferData, glBufferSubData,
+    glDeleteBuffers, glVertexAttribPointer, glEnableVertexAttribArray,
+    glVertexAttribDivisor, glDrawArraysInstanced,
+    GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_TEXTURE_2D,
+    GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW, GL_FLOAT, GL_FALSE, GL_TRIANGLES,
 )
-from mesh import Mesh
-from shader import ShaderProgram
-from texture import load_texture
+try:
+    from ..core.mesh import Mesh
+    from ..core.shader import ShaderProgram
+    from ..core.texture import load_texture
+except ImportError:
+    from mesh import Mesh
+    from shader import ShaderProgram
+    from texture import load_texture
 
 
 class Particle:
@@ -69,9 +78,35 @@ class ParticleSystem:
     def __init__(self, max_particles=6000):
         self.max_particles = max_particles
         self.particles = []
+        self._ambient_dust_budget = 0.0
+        self._leaf_budget = 0.0
 
         # Recursos GPU
         self.mesh = Mesh.create_quad(size=1.0)
+        self.instance_vbo = glGenBuffers(1)
+        self.instance_stride = 8 * 4  # posição, tamanho, alpha e cor RGB
+
+        # Os dados que mudam por partícula ficam num VBO dinâmico. O quad é
+        # compartilhado pela GPU e glDrawArraysInstanced o replica em uma só
+        # draw call, inclusive quando há milhares de partículas no colapso.
+        glBindVertexArray(self.mesh.vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.instance_vbo)
+        glBufferData(GL_ARRAY_BUFFER, self.max_particles * self.instance_stride, None, GL_DYNAMIC_DRAW)
+
+        glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, self.instance_stride, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(3)
+        glVertexAttribDivisor(3, 1)
+        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, self.instance_stride, ctypes.c_void_p(12))
+        glEnableVertexAttribArray(4)
+        glVertexAttribDivisor(4, 1)
+        glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, self.instance_stride, ctypes.c_void_p(16))
+        glEnableVertexAttribArray(5)
+        glVertexAttribDivisor(5, 1)
+        glVertexAttribPointer(6, 3, GL_FLOAT, GL_FALSE, self.instance_stride, ctypes.c_void_p(20))
+        glEnableVertexAttribArray(6)
+        glVertexAttribDivisor(6, 1)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
         self.texture_id = load_texture("assets/textures/smoke.png")
         self.shader = ShaderProgram.from_files(
             "assets/shaders/billboard.vert",
@@ -109,6 +144,41 @@ class ParticleSystem:
             p.update(dt)
         self.particles = [p for p in self.particles if p.alive]
 
+    def emit_ambient(self, camera_position, forest, dt: float):
+        """Pólen e folhas discretos em repouso; continuam no VBO instanciado."""
+        self._ambient_dust_budget += dt * 3.0
+        self._leaf_budget += dt * 0.9
+        cx, cy, cz = camera_position
+
+        while self._ambient_dust_budget >= 1.0 and len(self.particles) < self.max_particles:
+            self._ambient_dust_budget -= 1.0
+            angle = random.uniform(0.0, math.tau)
+            radius = random.uniform(4.0, 20.0)
+            p = Particle(
+                (cx + math.cos(angle) * radius, random.uniform(0.35, 3.5), cz + math.sin(angle) * radius),
+                (random.uniform(-0.18, 0.18), random.uniform(0.08, 0.30), random.uniform(-0.18, 0.18)),
+                size_range=(0.05, 0.13), lifetime_range=(4.0, 7.0), color=(0.90, 0.82, 0.62),
+            )
+            p.max_size = p.initial_size * 1.25
+            self.particles.append(p)
+
+        while self._leaf_budget >= 1.0 and len(self.particles) < self.max_particles:
+            self._leaf_budget -= 1.0
+            nearby = [t for t in forest if math.hypot(t.x - cx, t.z - cz) < 30.0]
+            if not nearby:
+                continue
+            tree = random.choice(nearby)
+            color = random.choice(((0.21, 0.38, 0.12), (0.38, 0.29, 0.10), (0.48, 0.36, 0.12)))
+            p = Particle(
+                (tree.x + random.uniform(-tree.foliage_radius, tree.foliage_radius),
+                 tree.trunk_height + tree.foliage_height * random.uniform(0.45, 0.95),
+                 tree.z + random.uniform(-tree.foliage_radius, tree.foliage_radius)),
+                (random.uniform(-0.45, 0.45), random.uniform(-0.55, -0.18), random.uniform(-0.45, 0.45)),
+                size_range=(0.07, 0.15), lifetime_range=(2.5, 4.5), color=color,
+            )
+            p.max_size = p.initial_size
+            self.particles.append(p)
+
     def draw(self, view_matrix: np.ndarray, projection_matrix: np.ndarray):
         """
         Renderiza todas as partículas com billboarding esférico e alpha blending.
@@ -116,11 +186,13 @@ class ParticleSystem:
         if not self.particles:
             return
 
-        # Extrai os vetores Right e Up da View Matrix para orientar os quads
-        # Linha 0 = Right, Linha 1 = Up
+        # Extrai Right e Up em espaço de mundo para orientar os quads.
         cam_right = view_matrix[0, 0:3]
         cam_up = view_matrix[1, 0:3]
-        cam_dir = view_matrix[2, 0:3]
+
+        instance_data = np.empty((len(self.particles), 8), dtype=np.float32)
+        for i, p in enumerate(self.particles):
+            instance_data[i] = (p.x, p.y, p.z, p.size, p.alpha, *p.color)
 
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -129,31 +201,18 @@ class ParticleSystem:
         self.shader.use()
         self.shader.set_uniform_mat4("u_view", view_matrix)
         self.shader.set_uniform_mat4("u_projection", projection_matrix)
+        self.shader.set_uniform_vec3("u_camera_right", cam_right)
+        self.shader.set_uniform_vec3("u_camera_up", cam_up)
         self.shader.set_uniform_int("u_texture", 0)
 
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
 
-        # Matriz de modelo do billboard:
-        # Coluna 0: Right * size
-        # Coluna 1: Up * size
-        # Coluna 2: Dir * size
-        # Coluna 3: Pos
-        model = np.eye(4, dtype=np.float32)
-
-        for p in self.particles:
-            s = p.size
-            model[0:3, 0] = cam_right * s
-            model[0:3, 1] = cam_up * s
-            model[0:3, 2] = cam_dir * s
-            model[0, 3] = p.x
-            model[1, 3] = p.y
-            model[2, 3] = p.z
-
-            self.shader.set_uniform_mat4("u_model", model)
-            self.shader.set_uniform_float("u_particle_alpha", p.alpha)
-            self.shader.set_uniform_vec3("u_particle_color", p.color)
-
-            self.mesh.draw()
+        glBindBuffer(GL_ARRAY_BUFFER, self.instance_vbo)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, instance_data.nbytes, instance_data)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(self.mesh.vao)
+        glDrawArraysInstanced(GL_TRIANGLES, 0, self.mesh.vertex_count, len(self.particles))
+        glBindVertexArray(0)
 
         self.shader.stop()
         glDepthMask(True)
@@ -164,6 +223,9 @@ class ParticleSystem:
         if self.mesh:
             self.mesh.cleanup()
             self.mesh = None
+        if self.instance_vbo is not None:
+            glDeleteBuffers(1, [self.instance_vbo])
+            self.instance_vbo = None
         if self.shader:
             self.shader.cleanup()
             self.shader = None

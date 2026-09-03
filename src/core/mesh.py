@@ -20,7 +20,10 @@ from OpenGL.GL import (
     glVertexAttribPointer, glEnableVertexAttribArray, glDrawArrays,
     GL_ARRAY_BUFFER, GL_STATIC_DRAW, GL_FLOAT, GL_FALSE, GL_TRIANGLES,
 )
-from obj_loader import parse_obj, create_cube_mesh, create_plane_mesh, create_quad_mesh, create_cylinder_mesh
+try:
+    from .obj_loader import parse_obj, create_cube_mesh, create_plane_mesh, create_quad_mesh, create_cylinder_mesh
+except ImportError:
+    from obj_loader import parse_obj, create_cube_mesh, create_plane_mesh, create_quad_mesh, create_cylinder_mesh
 
 
 class Mesh:
@@ -48,6 +51,11 @@ class Mesh:
         # Atributo 2: Vetor Normal (nx, ny, nz)
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, self.stride, ctypes.c_void_p(20))
         glEnableVertexAttribArray(2)
+
+        # Atributo 3: Vetor Tangente (tx, ty, tz) para Normal Mapping
+        if self.stride >= 44:
+            glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, self.stride, ctypes.c_void_p(32))
+            glEnableVertexAttribArray(3)
 
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         glBindVertexArray(0)

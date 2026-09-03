@@ -21,9 +21,14 @@ from OpenGL.GL import (
     GL_BLEND, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
     GL_DEPTH_TEST,
 )
-from shader import ShaderProgram
-from math_utils import ortho, translate, scale
-from mesh import Mesh
+try:
+    from ..core.shader import ShaderProgram
+    from ..core.math_utils import ortho, translate, scale
+    from ..core.mesh import Mesh
+except ImportError:
+    from shader import ShaderProgram
+    from math_utils import ortho, translate, scale
+    from mesh import Mesh
 
 
 class TextTexture:
@@ -126,7 +131,7 @@ class HUD:
         glBindTexture(GL_TEXTURE_2D, tex_id)
         self.unit_quad.draw()
 
-    def draw(self, screen_width: int, screen_height: int, earthquake, camera, buildings, houses, fps: float):
+    def draw(self, screen_width: int, screen_height: int, earthquake, camera, buildings, houses, fps: float, lamp_posts=None):
         """
         Renderiza o HUD 2D completo com isolamento de profundidade.
         """
@@ -146,7 +151,7 @@ class HUD:
         self.shader.set_uniform_int("u_texture", 0)
 
         # 1. Painel Superior Esquerdo: Informações Sísmicas e Métricas
-        panel_w = 340
+        panel_w = 410
         panel_h = 195
         self._draw_quad(15, 15, panel_w, panel_h, self.white_tex, (0.05, 0.08, 0.12, 0.78))
 
@@ -178,7 +183,7 @@ class HUD:
         # Fundo da barra de trauma
         bar_x = 25
         bar_y = 93
-        bar_w = 310
+        bar_w = 360
         bar_h = 10
         self._draw_quad(bar_x, bar_y, bar_w, bar_h, self.white_tex, (0.2, 0.2, 0.2, 0.8))
         # Preenchimento da barra (verde -> amarelo -> vermelho conforme sobe)
@@ -192,7 +197,7 @@ class HUD:
             )
             self._draw_quad(bar_x, bar_y, fill_w, bar_h, self.white_tex, bar_col)
 
-        # Contagem de Prédios
+        # Contagem de Estruturas
         total_b = len(buildings)
         collapsed_b = sum(1 for b in buildings if b.collapse_progress >= 0.95)
         intact_b = total_b - collapsed_b
@@ -201,7 +206,14 @@ class HUD:
         collapsed_h = sum(1 for h in houses if h.collapse_progress >= 0.95)
         intact_h = total_h - collapsed_h
         
-        b_text = f"Prédios: {intact_b}/{total_b} | Casas: {intact_h}/{total_h}"
+        lp_info = ""
+        if lamp_posts:
+            total_lp = len(lamp_posts)
+            fallen_lp = sum(1 for lp in lamp_posts if lp.fallen or lp.falling)
+            intact_lp = total_lp - fallen_lp
+            lp_info = f" | Postes: {intact_lp}/{total_lp}"
+
+        b_text = f"Prédios: {intact_b}/{total_b} | Casas: {intact_h}/{total_h}{lp_info}"
         lbl_b = self._get_label("buildings", self.body_font, b_text, (200, 220, 240))
         lbl_b.set_text(b_text)
         self._draw_quad(25, 110, lbl_b.width, lbl_b.height, lbl_b.tex_id)

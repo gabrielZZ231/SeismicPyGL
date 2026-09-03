@@ -18,7 +18,10 @@ import math
 import numpy as np
 import pygame
 from OpenGL.GLU import gluLookAt
-from math_utils import look_at, perlin1d
+try:
+    from .math_utils import look_at, perlin1d
+except ImportError:
+    from math_utils import look_at, perlin1d
 
 
 class FreeCamera:
@@ -118,7 +121,7 @@ class FreeCamera:
         dx = rel_x * self.mouse_sensitivity
         dy = rel_y * self.mouse_sensitivity
 
-        self.yaw += dx
+        self.yaw -= dx
         self.pitch -= dy
         self.pitch = max(-84.0, min(84.0, self.pitch))
 

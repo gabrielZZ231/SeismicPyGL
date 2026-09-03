@@ -8,5 +8,3 @@ __pycache__/
 *.zip
 *.exr
 *.blend
-STATUS_ISSUES.md
-PROMPT_EXEC*

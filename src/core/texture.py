@@ -18,10 +18,40 @@ from OpenGL.GL import (
 )
 
 _loaded_textures = []
+_pbr_set_cache = {}
+_flat_normal_id = None
+_default_roughness_id = None
 
 
-def create_texture_from_image(img: Image.Image, wrap=GL_REPEAT) -> int:
-    """Faz upload de um objeto PIL.Image para a GPU via glTexImage2D."""
+def procedural_texture_size():
+    """Materiais nítidos em 4K, sem alocar texturas 4K desnecessárias em 1080p."""
+    preset = os.environ.get("SEISMICPYGL_RESOLUTION", "1080p").lower()
+    return 1024 if preset in {"4k", "2160p", "3840x2160"} else 512
+
+
+def get_flat_normal_texture() -> int:
+    """Gera textura 2x2 normal neutra (128, 128, 255) em tangent space."""
+    global _flat_normal_id
+    if _flat_normal_id is None:
+        img = Image.new("RGBA", (2, 2), (128, 128, 255, 255))
+        _flat_normal_id = create_texture_from_image(img)
+    return _flat_normal_id
+
+
+def get_default_roughness_texture(value: int = 180) -> int:
+    """Gera textura 2x2 de rugosidade padrao."""
+    global _default_roughness_id
+    if _default_roughness_id is None:
+        img = Image.new("RGBA", (2, 2), (value, value, value, 255))
+        _default_roughness_id = create_texture_from_image(img)
+    return _default_roughness_id
+
+
+def create_texture_from_image(img: Image.Image, wrap=GL_REPEAT, max_size=2048) -> int:
+    """Faz upload de um objeto PIL.Image para a GPU via glTexImage2D com redimensionamento inteligente."""
+    if max_size and (img.width > max_size or img.height > max_size):
+        img = img.resize((max_size, max_size), Image.Resampling.LANCZOS)
+
     img = img.transpose(Image.FLIP_TOP_BOTTOM).convert("RGBA")
     width, height = img.size
     data = img.tobytes()
@@ -46,27 +76,90 @@ def create_texture_from_image(img: Image.Image, wrap=GL_REPEAT) -> int:
 def load_texture(path: str, wrap=GL_REPEAT) -> int:
     """
     Carrega textura do disco com PIL.
-    Se o arquivo não existir, gera textura procedural padrão correspondente.
+    Se o arquivo nao existir, gera textura procedural padrao correspondente.
     """
-    if os.path.exists(path):
+    if path and os.path.exists(path):
         img = Image.open(path)
         return create_texture_from_image(img, wrap)
     else:
-        # Fallback procedural se não encontrar
-        print(f"[Aviso] Textura '{path}' não encontrada. Gerando procedural correspondente.")
-        basename = os.path.basename(path).lower()
+        # Fallback procedural se nao encontrar
+        if path:
+            print(f"[Aviso] Textura '{path}' nao encontrada. Gerando procedural correspondente.")
+            basename = os.path.basename(path).lower()
+        else:
+            basename = ""
         if "smoke" in basename or "particle" in basename:
             return create_smoke_particle_texture()
         elif "grass" in basename or "ground" in basename:
             return create_grass_texture()
         elif "asphalt" in basename or "road" in basename:
             return create_asphalt_texture()
+        elif "nor" in basename or "normal" in basename:
+            return get_flat_normal_texture()
+        elif "rough" in basename:
+            return get_default_roughness_texture()
         else:
             return create_concrete_texture()
 
 
-def create_concrete_texture(size=128) -> int:
+def load_texture_set(material_dir: str, wrap=GL_REPEAT) -> dict:
+    """
+    Carrega albedo, normal e roughness de uma pasta de material PBR.
+    Busca arquivos por sufixo (_diff_, _nor_gl_, _rough_) dentro de material_dir.
+    Retorna dict com {'albedo': int, 'normal': int, 'roughness': int}.
+    Usa cache e fallbacks procedurais se algum arquivo faltar.
+    """
+    # Resolve sempre a partir deste módulo; assim a execução fora da raiz do
+    # repositório não troca silenciosamente materiais PBR por fallbacks.
+    if not os.path.isabs(material_dir):
+        material_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), material_dir)
+    material_dir = os.path.normpath(material_dir)
+
+    if material_dir in _pbr_set_cache:
+        return _pbr_set_cache[material_dir]
+
+    diff_path = None
+    nor_path = None
+    rough_path = None
+
+    if os.path.exists(material_dir):
+        for f in os.listdir(material_dir):
+            fl = f.lower()
+            full = os.path.join(material_dir, f)
+            if "_diff_" in fl and fl.endswith((".jpg", ".png", ".jpeg", ".webp")):
+                diff_path = full
+            elif "_nor_gl_" in fl and fl.endswith((".png", ".jpg")):
+                nor_path = full
+            elif "_rough_" in fl and fl.endswith((".png", ".jpg")):
+                rough_path = full
+
+    # O repositório pode não incluir todos os pacotes PBR externos. Seleciona
+    # um material procedural coerente em alta definição, em vez de concreto
+    # genérico para asfalto e grama.
+    material_name = os.path.basename(os.path.dirname(material_dir)).lower()
+    if diff_path:
+        albedo_id = load_texture(diff_path, wrap=wrap)
+    elif "asphalt" in material_name:
+        albedo_id = create_asphalt_texture(procedural_texture_size())
+    elif "grass" in material_name:
+        albedo_id = create_grass_texture(procedural_texture_size())
+    else:
+        albedo_id = create_concrete_texture(procedural_texture_size())
+    normal_id = load_texture(nor_path, wrap=wrap) if nor_path else get_flat_normal_texture()
+    rough_id = load_texture(rough_path, wrap=wrap) if rough_path else get_default_roughness_texture()
+
+    res = {
+        "albedo": albedo_id,
+        "normal": normal_id,
+        "roughness": rough_id
+    }
+    _pbr_set_cache[material_dir] = res
+    return res
+
+
+def create_concrete_texture(size=None) -> int:
     """Gera textura procedural de concreto com ruído fino."""
+    size = size or procedural_texture_size()
     rng = np.random.default_rng(123)
     base = rng.integers(130, 160, (size, size), dtype=np.uint8)
     noise = rng.integers(-15, 16, (size, size), dtype=np.int16)
@@ -82,8 +175,9 @@ def create_concrete_texture(size=128) -> int:
     return create_texture_from_image(img)
 
 
-def create_grass_texture(size=128) -> int:
+def create_grass_texture(size=None) -> int:
     """Gera textura procedural de terreno/grama."""
+    size = size or procedural_texture_size()
     rng = np.random.default_rng(456)
     green = rng.integers(80, 120, (size, size), dtype=np.uint8)
     red = (green * 0.55).astype(np.uint8)
@@ -129,8 +223,9 @@ def create_smoke_particle_texture(size=64) -> int:
     return create_texture_from_image(img, wrap=GL_CLAMP_TO_EDGE)
 
 
-def create_asphalt_texture(size=128) -> int:
+def create_asphalt_texture(size=None) -> int:
     """Gera textura procedural de asfalto com ruído e faixa central amarela."""
+    size = size or procedural_texture_size()
     rng = np.random.default_rng(789)
     base = rng.integers(45, 65, (size, size), dtype=np.uint8)
     noise = rng.integers(-8, 9, (size, size), dtype=np.int16)

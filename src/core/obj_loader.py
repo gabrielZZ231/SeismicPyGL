@@ -67,13 +67,79 @@ def parse_obj(file_path: str):
                     interleaved_vertices.extend(face_vertices[i])
                     interleaved_vertices.extend(face_vertices[i + 1])
 
-    vertex_data = np.array(interleaved_vertices, dtype=np.float32)
-    vertex_count = len(vertex_data) // 8
-    return vertex_data, vertex_count, VERTEX_STRIDE
+    arr = np.array(interleaved_vertices, dtype=np.float32)
+    return compute_tangents(arr)
 
 
 # ---------------------------------------------------------------------------
-# Geradores Procedurais de Malha (Mesmo layout contíguo de 32 bytes)
+# Cálculo de Vetores Tangentes para Normal Mapping (TBN)
+# ---------------------------------------------------------------------------
+
+def compute_tangents(vertex_data: np.ndarray) -> tuple:
+    """
+    Recebe vertex_data com layout [x, y, z, u, v, nx, ny, nz] (8 floats por vértice)
+    e calcula o vetor tangente [tx, ty, tz] para cada triângulo a partir das UVs.
+    Retorna (new_data, vertex_count, 44).
+    """
+    verts = np.asarray(vertex_data, dtype=np.float32).reshape(-1, 8)
+    n_verts = len(verts)
+    n_tris = n_verts // 3
+
+    out = np.zeros((n_verts, 11), dtype=np.float32)
+    out[:, :8] = verts
+
+    for i in range(n_tris):
+        i0 = i * 3
+        i1 = i0 + 1
+        i2 = i0 + 2
+
+        p0 = verts[i0, 0:3]
+        p1 = verts[i1, 0:3]
+        p2 = verts[i2, 0:3]
+
+        uv0 = verts[i0, 3:5]
+        uv1 = verts[i1, 3:5]
+        uv2 = verts[i2, 3:5]
+
+        dp1 = p1 - p0
+        dp2 = p2 - p0
+
+        duv1 = uv1 - uv0
+        duv2 = uv2 - uv0
+
+        det = duv1[0] * duv2[1] - duv2[0] * duv1[1]
+        if abs(det) > 1e-6:
+            inv_det = 1.0 / det
+            tan = (dp1 * duv2[1] - dp2 * duv1[1]) * inv_det
+            norm_t = np.linalg.norm(tan)
+            if norm_t > 1e-6:
+                tan /= norm_t
+            else:
+                tan = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            norm = verts[i0, 5:8]
+            up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            if abs(np.dot(norm, up)) > 0.9:
+                up = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            tan = np.cross(up, norm)
+            norm_t = np.linalg.norm(tan)
+            if norm_t > 1e-6:
+                tan /= norm_t
+            else:
+                tan = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        out[i0, 8:11] = tan
+        out[i1, 8:11] = tan
+        out[i2, 8:11] = tan
+
+    for j in range(n_tris * 3, n_verts):
+        out[j, 8:11] = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+    return out.flatten(), n_verts, 44
+
+
+# ---------------------------------------------------------------------------
+# Geradores Procedurais de Malha (Layout de 44 bytes com Tangentes)
 # ---------------------------------------------------------------------------
 
 def create_cube_mesh(width=1.0, height=1.0, depth=1.0, y_offset=0.0):
@@ -136,7 +202,7 @@ def create_cube_mesh(width=1.0, height=1.0, depth=1.0, y_offset=0.0):
     ]
 
     arr = np.array(verts, dtype=np.float32)
-    return arr, len(arr) // 8, VERTEX_STRIDE
+    return compute_tangents(arr)
 
 
 def create_plane_mesh(size=100.0, divisions=50):
@@ -174,7 +240,7 @@ def create_plane_mesh(size=100.0, divisions=50):
             ])
 
     arr = np.array(verts, dtype=np.float32)
-    return arr, len(arr) // 8, VERTEX_STRIDE
+    return compute_tangents(arr)
 
 
 def create_quad_mesh(size=1.0):
@@ -190,7 +256,7 @@ def create_quad_mesh(size=1.0):
         -h,  h, 0.0,  0.0, 1.0,  0.0, 0.0, 1.0,
     ]
     arr = np.array(verts, dtype=np.float32)
-    return arr, len(arr) // 8, VERTEX_STRIDE
+    return arr, len(arr) // 8, 32
 
 
 def create_cylinder_mesh(base_radius=1.0, top_radius=1.0, height=1.0, slices=16):
@@ -235,4 +301,4 @@ def create_cylinder_mesh(base_radius=1.0, top_radius=1.0, height=1.0, slices=16)
         ])
 
     arr = np.array(verts, dtype=np.float32)
-    return arr, len(arr) // 8, VERTEX_STRIDE
+    return compute_tangents(arr)

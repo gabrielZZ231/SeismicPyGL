@@ -14,11 +14,14 @@ from OpenGL.GL import (
     glGetShaderInfoLog, glDeleteShader, glCreateProgram, glAttachShader,
     glLinkProgram, glGetProgramiv, glGetProgramInfoLog, glUseProgram,
     glDeleteProgram, glGetUniformLocation, glUniform1i, glUniform1f,
-    glUniform2f, glUniform3f, glUniform4f, glUniformMatrix4fv,
+    glUniform2f, glUniform2fv, glUniform3f, glUniform4f, glUniformMatrix4fv,
     glGetError, GL_VERTEX_SHADER, GL_FRAGMENT_SHADER,
     GL_COMPILE_STATUS, GL_LINK_STATUS, GL_FALSE, GL_NO_ERROR,
 )
-from math_utils import to_gl_matrix
+try:
+    from .math_utils import to_gl_matrix
+except ImportError:
+    from math_utils import to_gl_matrix
 
 
 def check_gl_error(label: str = ""):
@@ -118,6 +121,13 @@ class ShaderProgram:
         loc = self.get_uniform_location(name)
         if loc != -1:
             glUniform2f(loc, float(v[0]), float(v[1]))
+
+    def set_uniform_vec2_array(self, name: str, values):
+        """Envia uma pequena lista vec2 contígua (ex.: pontos de contato no chão)."""
+        loc = self.get_uniform_location(name)
+        if loc != -1 and len(values):
+            data = np.ascontiguousarray(values, dtype=np.float32)
+            glUniform2fv(loc, len(data), data)
 
     def set_uniform_vec3(self, name: str, v):
         loc = self.get_uniform_location(name)
