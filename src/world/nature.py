@@ -139,14 +139,66 @@ class Tree:
             cube_mesh.draw()
 
 
-def generate_forest(count=60, center=(0.0, 0.0), radius_range=(18.0, 55.0)):
+def generate_forest(count=60, center=(0.0, 0.0), radius_range=(18.0, 55.0),
+                    avoid_zones=None, avoid_center=None, avoid_radius=0.0,
+                    avoid_buildings=None, avoid_streets=None, **kwargs):
+    """
+    Gera uma floresta com árvores procedurais PBR espalhadas em anel,
+    respeitando zonas de exclusão (vila, montanha, ruas e prédios).
+    """
     forest = []
+    cx, cz = center
     r_min, r_max = radius_range
-    for _ in range(count):
+    attempts = 0
+    max_attempts = count * 20
+
+    zones = list(avoid_zones) if avoid_zones else []
+    if avoid_center is not None and avoid_radius > 0:
+        zones.append((avoid_center[0], avoid_center[1], avoid_radius))
+
+    while len(forest) < count and attempts < max_attempts:
+        attempts += 1
         theta = random.uniform(0, 2.0 * math.pi)
         r = math.sqrt(random.uniform(r_min**2, r_max**2))
-        x = center[0] + r * math.cos(theta)
-        z = center[1] + r * math.sin(theta)
+        x = cx + r * math.cos(theta)
+        z = cz + r * math.sin(theta)
+
+        # 1. Zonas de exclusão circulares (vila, montanha, etc.)
+        blocked = False
+        for ax, az, ar in zones:
+            if math.hypot(x - ax, z - az) < ar:
+                blocked = True
+                break
+        if blocked:
+            continue
+
+        # 2. Evita prédios e casas
+        if avoid_buildings:
+            for b in avoid_buildings:
+                hw = (getattr(b, "width", 2.0) * 0.5) + 1.2
+                hd = (getattr(b, "depth", 2.0) * 0.5) + 1.2
+                if abs(x - b.x) < hw and abs(z - b.z) < hd:
+                    blocked = True
+                    break
+        if blocked:
+            continue
+
+        # 3. Evita ruas
+        if avoid_streets:
+            for s in avoid_streets:
+                direction = getattr(s, "direction", "x")
+                length = getattr(s, "length", 20.0)
+                width = getattr(s, "width", 2.5)
+                if direction == "x":
+                    if abs(x - s.x) < (length * 0.5 + 0.6) and abs(z - s.z) < (width * 0.5 + 0.8):
+                        blocked = True
+                        break
+                else:
+                    if abs(x - s.x) < (width * 0.5 + 0.8) and abs(z - s.z) < (length * 0.5 + 0.6):
+                        blocked = True
+                        break
+        if blocked:
+            continue
 
         scale_factor = random.uniform(0.75, 1.35)
         trunk_h = 1.6 * scale_factor
@@ -163,4 +215,5 @@ def generate_forest(count=60, center=(0.0, 0.0), radius_range=(18.0, 55.0)):
             foliage_height=foliage_h,
             foliage_radius=foliage_r
         ))
+
     return forest
